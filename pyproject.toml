@@ -1,0 +1,12 @@
+[project]
+name = "audio"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "certifi>=2025.6.15",
+    "numpy>=2.3.1",
+    "termcolor>=3.1.0",
+    "vosk>=0.3.45",
+]
