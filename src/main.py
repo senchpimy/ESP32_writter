@@ -1,84 +1,40 @@
 import sys
 import socket
-import json
 import time
 import threading
-import subprocess
 
 import numpy as np
+import escritor as esc
+import popup
 from gi.repository import GLib
-from vosk import Model, KaldiRecognizer
 from fabric import Application
-from fabric.widgets.box import Box
-from fabric.widgets.label import Label
-from fabric.widgets.wayland import WaylandWindow as Window
 
 HOST = "0.0.0.0"
 PORT = 8888
-MODEL_PATH = "./models/vosk-model-es-0.42"
 SAMPLE_RATE = 16000.0
 VOLUME_MULTIPLIER = 10.0
-TIMEOUT_PAUSA = 1.0  # Segundos de silencio para considerar una pausa
-TIMEOUT_ESPERA = 60.0  # Segundos para esperar una nueva elocución
 
-WIDGET_WIDTH = 420
-WIDGET_HEIGHT = 150
+ENGINE_CHOICE = "whisper"
+
+VOSK_MODEL_PATH = "./models/vosk-model-es-0.42"
+# "tiny", "base", "small", "medium", "large"
+# WHISPER_MODEL_NAME = "base"
+WHISPER_MODEL_NAME = "Drazcat/whisper-small-es"
+# WHISPER_MODEL_NAME = "tiny"
+WHISPER_LANGUAGE = "spanish"
+
+TIMEOUT_PAUSA = 2.0
+TIMEOUT_ESPERA = 60.0
 
 CSS_STYLES = """
 window { background-color: transparent; }
 #popup-box {
-    background-color: rgba(30, 30, 46, 0.95);
-    color: #cdd6f4;
-    border-radius: 18px;
-    border: 1px solid #89b4fa;
-    padding: 22px;
-    font-size: 16px;
+    background-color: rgba(30, 30, 46, 0.95); color: #cdd6f4;
+    border-radius: 18px; border: 1px solid #89b4fa;
+    padding: 22px; font-size: 16px;
 }
 #popup-label { font-weight: bold; }
 """
-
-try:
-    print(f"Cargando modelo Vosk desde: {MODEL_PATH}")
-    VOSK_MODEL = Model(MODEL_PATH)
-    print("Modelo Vosk cargado exitosamente.")
-except Exception as e:
-    print(f"Error crítico al cargar el modelo Vosk: {e}")
-    sys.exit(1)
-
-
-class TranscriptionPopup(Window):
-    def __init__(self, **kwargs):
-        super().__init__(
-            layer="overlay", anchor="top left", exclusivity="ignore", **kwargs
-        )
-        self.set_size_request(WIDGET_WIDTH, WIDGET_HEIGHT)
-        self.transcription_label = Label(name="popup-label")
-        self.add(
-            Box(
-                name="popup-box",
-                children=[self.transcription_label],
-                valign="center",
-                halign="center",
-            )
-        )
-        self.hide()
-
-    def update_text(self, text: str):
-        self.transcription_label.set_label(text)
-
-    def set_position_from_cursor(self):
-        try:
-            result = subprocess.run(
-                ["hyprctl", "cursorpos"], capture_output=True, text=True, check=True
-            )
-            x_str, y_str = result.stdout.strip().split(",")
-            cursor_x, cursor_y = int(x_str), int(y_str.strip())
-            pos_x = cursor_x - (WIDGET_WIDTH // 2)
-            pos_y = cursor_y - (WIDGET_HEIGHT // 2)
-            self.set_margin(f"{pos_y}px 0 0 {pos_x}px")
-        except Exception as e:
-            print(f"Advertencia: No se pudo obtener la posición del cursor: {e}")
-            self.set_margin("0px 0 0 0px")
 
 
 def increase_volume_pcm16(audio_bytes, multiplier):
@@ -93,82 +49,142 @@ def increase_volume_pcm16(audio_bytes, multiplier):
         return audio_bytes
 
 
-def handle_client_connection(conn, addr, popup_window):
-    """
-    Maneja la conexión de un cliente. El popup aparece y se reposiciona con cada
-    elocución y se oculta durante las pausas.
-    """
-    print(f"Cliente conectado: {addr}. Esperando audio...")
+def get_final_result(engine, popup_window, addr, popup_is_visible):
+    text = engine.get_final_result()
+    if text:
+        print(f"[{addr}] Final: {text}")
+        GLib.idle_add(popup_window.update_text, text.capitalize())
+        time.sleep(2.0)
 
-    recognizer = KaldiRecognizer(VOSK_MODEL, SAMPLE_RATE)
-    recognizer.SetWords(True)
+    print("Transmision terminada")
+    if popup_is_visible:
+        GLib.idle_add(popup_window.hide)
+
+    print(f"[{addr}] Transcipcion finalizada.")
+
+
+def handle_client_connection(conn, addr, popup_window, engine: esc.TranscriptionEngine):
+    """
+    Maneja una conexión de cliente persistente. La señal '[END]' o un timeout
+    desencadenan la transcripción inmediata y preparan al servidor para la
+    siguiente elocución, sin cerrar la conexión.
+    """
+    print(f"Cliente conectado: {addr}. Usando motor: {engine.__class__.__name__}")
 
     popup_is_visible = False
     conn.settimeout(TIMEOUT_ESPERA)
+    engine.reset()
 
-    try:
-        while True:
-            try:
-                data_original = conn.recv(1024)
-                if not data_original:
-                    print(f"[{addr}] Cliente desconectado (flujo finalizado).")
-                    break
+    reception_buffer = bytearray()
 
-                if not popup_is_visible:
-                    print(
-                        f"[{addr}] Nueva elocución detectada. Mostrando y reposicionando popup."
-                    )
-                    GLib.idle_add(popup_window.set_position_from_cursor)
-                    GLib.idle_add(popup_window.update_text, "Escuchando...")
-                    GLib.idle_add(popup_window.show_all)
-                    popup_is_visible = True
-                    conn.settimeout(TIMEOUT_PAUSA)  # Timeout corto para detectar pausas
+    last_partial_time = time.time()
+    PARTIAL_UPDATE_INTERVAL = 0.5  # Segundos entre cada actualización de parcial
 
-                data_processed = increase_volume_pcm16(data_original, VOLUME_MULTIPLIER)
+    while True:
+        try:
 
-                if recognizer.AcceptWaveform(data_processed):
-                    result = json.loads(recognizer.Result())
-                    text = result.get("text", "")
-                    if text:
-                        GLib.idle_add(popup_window.update_text, text.capitalize())
-                        print(f"\n[{addr}] Resultado: {text}")
-                else:
-                    partial = json.loads(recognizer.PartialResult())
-                    partial_text = partial.get("partial", "")
-                    if partial_text:
-                        GLib.idle_add(popup_window.update_text, f"{partial_text}...")
-
-            except socket.timeout:
-                final_result = json.loads(recognizer.FinalResult())
-                text = final_result.get("text", "")
+            def process_transcription():
+                nonlocal popup_is_visible
+                text = engine.get_final_result()
                 if text:
-                    print(f"\n[{addr}] Final (por pausa): {text}")
+                    print(f"[{addr}] Final: {text}")
                     GLib.idle_add(popup_window.update_text, text.capitalize())
                     time.sleep(1.5)
 
                 print("Transmision terminada")
-                GLib.idle_add(popup_window.hide)
-                popup_is_visible = False
+                if popup_is_visible:
+                    GLib.idle_add(popup_window.hide)
+                    popup_is_visible = False
 
-                recognizer.Reset()
+                engine.reset()
                 conn.settimeout(TIMEOUT_ESPERA)
+
+            data_chunk = conn.recv(1024)
+            if not data_chunk:
+                print(f"[{addr}] Cliente desconectado (flujo finalizado).")
+                break
+
+            reception_buffer.extend(data_chunk)
+
+            end_signal_pos = reception_buffer.find(b"[END]")
+
+            if end_signal_pos != -1:
+                print(f"[{addr}] Señal de fin instantánea recibida.")
+
+                audio_to_process = reception_buffer[:end_signal_pos]
+                engine.accept_waveform(
+                    increase_volume_pcm16(audio_to_process, VOLUME_MULTIPLIER)
+                )
+
+                process_transcription()
+
+                reception_buffer.clear()
                 continue
 
-            except (ConnectionResetError, BrokenPipeError):
-                print(f"\n[{addr}] Conexión cerrada por el cliente.")
-                break
-            except Exception as e:
-                print(f"\n[{addr}] Error inesperado: {e}")
-                break
+            audio_to_process = bytes(reception_buffer)
 
-    finally:
-        print(f"[{addr}] Conexión finalizada.")
-        if popup_is_visible:
-            GLib.idle_add(popup_window.hide)
-        conn.close()
+            if not popup_is_visible and audio_to_process:
+                print(f"[{addr}] Nueva elocución detectada. Mostrando popup.")
+                GLib.idle_add(popup_window.set_position_from_cursor)
+                GLib.idle_add(popup_window.update_text, "Escuchando...")
+                GLib.idle_add(popup_window.show_all)
+                popup_is_visible = True
+                conn.settimeout(TIMEOUT_PAUSA)
+
+            if engine.accept_waveform(
+                increase_volume_pcm16(audio_to_process, VOLUME_MULTIPLIER)
+            ):
+                pass
+            else:
+                is_whisper = isinstance(engine, esc.WhisperEngine)
+                if is_whisper:
+                    current_time = time.time()
+                    if (current_time - last_partial_time) > PARTIAL_UPDATE_INTERVAL:
+                        partial_text = engine.get_partial_result()
+                        last_partial_time = current_time
+                else:
+                    partial_text = engine.get_partial_result()
+                if partial_text:
+                    GLib.idle_add(popup_window.update_text, f"{partial_text}...")
+
+            reception_buffer.clear()
+
+        except socket.timeout:
+            print(f"[{addr}] Final por pausa (timeout).")
+            process_transcription()
+            reception_buffer.clear()
+            continue
+
+        except (ConnectionResetError, BrokenPipeError):
+            print(f"\n[{addr}] Conexión cerrada por el cliente.")
+            break
+        except Exception as e:
+            print(f"\n[{addr}] Error inesperado durante la conexión: {e}")
+            break
+
+    print(f"[{addr}] Finalizando sesión de conexión.")
+    if popup_is_visible:
+        GLib.idle_add(popup_window.hide)
+    conn.close()
 
 
 def start_server_logic(popup_window, app):
+    try:
+        if ENGINE_CHOICE == "vosk":
+            engine = esc.VoskEngine(VOSK_MODEL_PATH, SAMPLE_RATE)
+        elif ENGINE_CHOICE == "whisper":
+            engine = esc.WhisperEngine(
+                WHISPER_MODEL_NAME, SAMPLE_RATE, WHISPER_LANGUAGE
+            )
+        else:
+            raise ValueError(
+                f"Motor '{ENGINE_CHOICE}' no reconocido. Opciones: 'vosk', 'whisper'."
+            )
+    except Exception as e:
+        print(f"Error fatal al inicializar el motor de transcripción: {e}")
+        GLib.idle_add(app.quit)
+        return
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -183,15 +199,15 @@ def start_server_logic(popup_window, app):
         while True:
             try:
                 conn, addr = s.accept()
-                handle_client_connection(conn, addr, popup_window)
+                handle_client_connection(conn, addr, popup_window, engine)
             except Exception as e:
                 print(f"Error en el bucle principal del servidor: {e}")
                 time.sleep(1)
 
 
 def main():
-    popup_window = TranscriptionPopup()
-    app = Application("vosk-fabric-popup", popup_window, standalone=True)
+    popup_window = popup.TranscriptionPopup()
+    app = Application("modular-transcriber", popup_window, standalone=True)
     app.set_stylesheet_from_string(CSS_STYLES)
 
     server_thread = threading.Thread(
