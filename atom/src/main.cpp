@@ -147,7 +147,7 @@ void loop() {
 #endif
 
   if (try_connection) {
-    Serial.println("Intentando conectar al servidor...");
+    Serial.println("Intentando conectar al servidor desde el loop...");
     try_connect_wifi((char *)ssid, (char *)password);
 
     if (WiFi.isConnected()) {
@@ -162,8 +162,16 @@ void loop() {
   }
 
   bool bottone_premuto = (digitalRead(BUTTON_PIN) == LOW);
+#ifdef DEBUG
+  if (bottone_premuto) {
+    Serial.println("Botón presionado, iniciando transmisión de audio...");
+  } else {
+    Serial.println("Botón no presionado, esperando...");
+  }
+#endif
 
   if (bottone_premuto && client.connected()) {
+    Serial.println("Botón presionado, iniciando transmisión de audio...");
     if (!trasmissione_attiva) {
       trasmissione_attiva = true;
       g_isRecording = true;
@@ -211,6 +219,9 @@ void loop() {
     if (trasmissione_attiva) {
       Serial.println("Botón soltado o cliente desconectado, deteniendo "
                      "transmisión de audio.");
+      if (client.connected()) {
+        client.write("[END]");
+      }
       trasmissione_attiva = false;
       g_isRecording = false;
     }
