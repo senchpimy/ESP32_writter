@@ -1,14 +1,85 @@
-from gi.repository import GLib
+import gi
+
+gi.require_version("Gtk", "3.0")
+
+import os
+import re
+import time
+import threading
+import subprocess
+from gi.repository import GLib, Gtk
 from fabric import Application
 from fabric.widgets.box import Box
 from fabric.widgets.label import Label
 from fabric.widgets.wayland import WaylandWindow as Window
-import subprocess
-import time
-import threading
+
+CSS_STYLES_TEMPLATE = """
+window {
+    background-color: transparent;
+}
+
+#popup-box {
+    /* Usamos el color de fondo de pywal con transparencia */
+    background-color: alpha(@background, 0.95);
+    color: @foreground;
+    
+    /* Borde sutil usando un color de acento de pywal */
+    border: 2px solid @color4;
+    border-radius: 18px;
+    padding: 22px;
+    font-size: 16px;
+    
+    /* Sombra para dar profundidad */
+}
+#popup-label {
+    font-weight: bold;
+}
+"""
+
+DEFAULT_COLORS = {
+    "@background": "#1e1e2e",
+    "@foreground": "#cdd6f4",
+    "@color4": "#89b4fa",
+}
 
 
-WIDGET_WIDTH = 200
+def load_pywal_css(template: str, wal_cache_file="~/.cache/wal/colors.css") -> str:
+    """Carga los colores de Pywal y los inyecta en la plantilla CSS."""
+    wal_file_path = os.path.expanduser(wal_cache_file)
+    colors = DEFAULT_COLORS.copy()  # Empezar con los por defecto
+
+    if os.path.exists(wal_file_path):
+        try:
+            with open(wal_file_path, "r") as f:
+                wal_css = f.read()
+
+            pywal_colors = {}
+            # Expresión regular para capturar --variable: #xxxxxx;
+            for match in re.finditer(
+                r"--(color\d+|background|foreground):\s*(#[0-9a-fA-F]{6});", wal_css
+            ):
+                key = match.group(1)
+                value = match.group(2)
+                pywal_colors[f"@{key}"] = value
+
+            if pywal_colors:
+                colors.update(pywal_colors)
+                print("Estilos de Pywal cargados exitosamente.")
+        except Exception as e:
+            print(f"Error al cargar Pywal: {e}. Usando colores por defecto.")
+    else:
+        print(
+            f"Advertencia: No se encontró '{wal_file_path}'. Usando colores por defecto."
+        )
+
+    themed_css = template
+    for key, value in colors.items():
+        themed_css = themed_css.replace(key, value)
+
+    return themed_css
+
+
+WIDGET_WIDTH = 420
 WIDGET_HEIGHT = 100
 
 
@@ -31,7 +102,6 @@ class TranscriptionPopup(Window):
 
     def update_text(self, text: str):
         if len(text) > 70:
-            # text = [text[i : i + 70] for i in range(0, len(text), 70)]
             n_text = []
             while len(text) > 70:
                 cut_index = text.rfind(" ", 0, 70)
@@ -40,9 +110,10 @@ class TranscriptionPopup(Window):
                 n_text.append(text[:cut_index])
                 text = text[cut_index:].lstrip()
             n_text.append(text)
-
             text = "\n".join(n_text)
+
         self.transcription_label.set_label(text)
+        self.queue_resize()
 
     def set_position_from_cursor(self):
         try:
@@ -50,11 +121,11 @@ class TranscriptionPopup(Window):
                 ["hyprctl", "cursorpos"], capture_output=True, text=True, check=True
             )
             x_str, y_str = result.stdout.strip().split(",")
-            # pos_x = int(x_str) - (WIDGET_WIDTH // 2)
-            # pos_y = int(y_str.strip()) - (WIDGET_HEIGHT // 2)
 
-            pos_x = int(x_str)
-            pos_y = int(y_str.strip())
+            current_width, current_height = self.get_size()
+            pos_x = int(x_str) - (current_width // 2)
+            pos_y = int(y_str.strip()) - (current_height // 2)
+
             self.set_margin(f"{pos_y}px 0 0 {pos_x}px")
         except Exception as e:
             print(f"Advertencia: No se pudo obtener la posición del cursor: {e}")
@@ -65,35 +136,27 @@ def text_simulator(popup_window: TranscriptionPopup):
     test_phrases = [
         "Hola.",
         "Esta es una prueba de transcripción.",
-        "Lorem ipsum dolor sit amet, officia excepteur ex fugiat reprehenderit enim labore culpa sint ad nisi Lorem pariatur mollit ex esse exercitation amet. Nisi anim cupidatat excepteur officia. Reprehenderit nostrud nostrud ipsum Lorem est aliquip amet voluptate voluptate dolor minim nulla est proident. Nostrud officia pariatur ut officia. Sit irure elit esse ea nulla sunt ex occaecat reprehenderit commodo officia dolor Lorem duis laboris cupidatat officia voluptate. Culpa proident adipisicing id nulla nisi laboris ex in Lorem sunt duis officia eiusmod. Aliqua reprehenderit commodo ex non excepteur duis sunt velit enim. Voluptate laboris sint cupidatat ullamco ut ea consectetur et est culpa et culpa duis."
+        "Ahora vamos a probar una frase mucho más larga para ver cómo el texto se ajusta automáticamente.",
+        "Este es un ejemplo de texto que debería ocupar varias líneas. Funciona gracias al corte manual de palabras.",
+        "Lorem ipsum dolor sit amet, officia excepteur ex fugiat reprehenderit enim labore culpa sint ad nisi Lorem pariatur mollit ex esse exercitation amet. Nisi anim cupidatat excepteur officia. Reprehenderit nostrud nostrud ipsum Lorem est aliquip amet voluptate voluptate dolor minim nulla est proident.",
         "Y ahora una frase corta de nuevo.",
         "Adiós.",
     ]
-
     GLib.idle_add(popup_window.show_all)
-
+    GLib.idle_add(popup_window.set_position_from_cursor)
     for phrase in test_phrases:
         GLib.idle_add(popup_window.update_text, phrase)
         time.sleep(4)
-
     GLib.idle_add(popup_window.get_application().quit)
 
 
 if __name__ == "__main__":
-    CSS_FOR_TESTING = """
-    window { background-color: transparent; }
-    #popup-box {
-        background-color: rgba(30, 30, 46, 0.95); color: #cdd6f4;
-        border-radius: 18px; border: 1px solid #89b4fa;
-        padding: 22px; font-size: 16px;
-    }
-    #popup-label { font-weight: bold; color: #00FF00; }
-    .transparent { background-color: transparent; border: none; }
-    """
-
     popup = TranscriptionPopup()
     app = Application("popup-test", popup, standalone=True)
-    app.set_stylesheet_from_string(CSS_FOR_TESTING)
+
+    final_css = load_pywal_css(CSS_STYLES_TEMPLATE)
+
+    app.set_stylesheet_from_string(final_css)
 
     simulator_thread = threading.Thread(
         target=text_simulator, args=(popup,), daemon=True

@@ -26,15 +26,7 @@ WHISPER_LANGUAGE = "spanish"
 TIMEOUT_PAUSA = 2.0
 TIMEOUT_ESPERA = 60.0
 
-CSS_STYLES = """
-window { background-color: transparent; }
-#popup-box {
-    background-color: rgba(30, 30, 46, 0.95); color: #cdd6f4;
-    border-radius: 18px; border: 1px solid #89b4fa;
-    padding: 22px; font-size: 16px;
-}
-#popup-label { font-weight: bold; }
-"""
+CSS_STYLES = popup.CSS_STYLES_TEMPLATE
 
 
 def increase_volume_pcm16(audio_bytes, multiplier):
@@ -208,7 +200,8 @@ def start_server_logic(popup_window, app):
 def main():
     popup_window = popup.TranscriptionPopup()
     app = Application("modular-transcriber", popup_window, standalone=True)
-    app.set_stylesheet_from_string(CSS_STYLES)
+    final_css = popup.load_pywal_css(CSS_STYLES)
+    app.set_stylesheet_from_string(final_css)
 
     server_thread = threading.Thread(
         target=start_server_logic, args=(popup_window, app), daemon=True
