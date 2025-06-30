@@ -14,14 +14,18 @@ PORT = 8888
 SAMPLE_RATE = 16000.0
 VOLUME_MULTIPLIER = 10.0
 
-ENGINE_CHOICE = "whisper"
+# ENGINE_CHOICE = "whisper"
+ENGINE_CHOICE = "vosk"
 
 VOSK_MODEL_PATH = "./models/vosk-model-es-0.42"
 # "tiny", "base", "small", "medium", "large"
 # WHISPER_MODEL_NAME = "base"
 WHISPER_MODEL_NAME = "Drazcat/whisper-small-es"
+# FASTER_WHISPER_MODEL_NAME = "base"
+FASTER_WHISPER_MODEL_NAME = "tiny"
 # WHISPER_MODEL_NAME = "tiny"
 WHISPER_LANGUAGE = "spanish"
+FASTER_WHISPER_LANGUAGE = "es"
 
 TIMEOUT_PAUSA = 2.0
 TIMEOUT_ESPERA = 60.0
@@ -168,9 +172,13 @@ def start_server_logic(popup_window, app):
             engine = esc.WhisperEngine(
                 WHISPER_MODEL_NAME, SAMPLE_RATE, WHISPER_LANGUAGE
             )
+        elif ENGINE_CHOICE == "faster-whisper":
+            engine = esc.FasterWhisperEngine(
+                FASTER_WHISPER_MODEL_NAME, SAMPLE_RATE, FASTER_WHISPER_LANGUAGE
+            )
         else:
             raise ValueError(
-                f"Motor '{ENGINE_CHOICE}' no reconocido. Opciones: 'vosk', 'whisper'."
+                f"Motor '{ENGINE_CHOICE}' no reconocido. Opciones: 'vosk', 'whisper' or 'faster-whisper'."
             )
     except Exception as e:
         print(f"Error fatal al inicializar el motor de transcripción: {e}")

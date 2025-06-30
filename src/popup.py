@@ -19,11 +19,9 @@ window {
 }
 
 #popup-box {
-    /* Usamos el color de fondo de pywal con transparencia */
-    background-color: alpha(@background, 0.95);
+    background-color: alpha(@background, 0.90);
     color: @foreground;
     
-    /* Borde sutil usando un color de acento de pywal */
     border: 2px solid @color4;
     border-radius: 18px;
     padding: 22px;
@@ -54,7 +52,6 @@ def load_pywal_css(template: str, wal_cache_file="~/.cache/wal/colors.css") -> s
                 wal_css = f.read()
 
             pywal_colors = {}
-            # Expresión regular para capturar --variable: #xxxxxx;
             for match in re.finditer(
                 r"--(color\d+|background|foreground):\s*(#[0-9a-fA-F]{6});", wal_css
             ):
@@ -98,7 +95,16 @@ class TranscriptionPopup(Window):
                 halign="center",
             )
         )
+        self.connect("show", self.apply_theme)
         self.hide()
+
+    def apply_theme(self, *args):
+        """Carga y aplica el tema de Pywal a la aplicación."""
+        print("Aplicando/Recargando tema de Pywal...")
+        app = self.get_application()
+        if app:
+            final_css = load_pywal_css(CSS_STYLES_TEMPLATE)
+            app.set_stylesheet_from_string(final_css)
 
     def update_text(self, text: str):
         if len(text) > 70:
