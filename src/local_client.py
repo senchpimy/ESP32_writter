@@ -2,6 +2,8 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 
+
+from pathlib import Path
 from gi.repository import GLib, Gtk, Gdk
 from fabric import Application
 from fabric.widgets.wayland import WaylandWindow as Window
@@ -91,7 +93,10 @@ class TranscriptionPopup(Window):
         self.set_app_paintable(True)
         self.glow_level = 0.0
 
-        mic_icon = Svg(svg_file="mic.svg", name="mic-icon")
+        script_dir = Path(__file__).parent
+        svg_path = script_dir / "mic.svg"
+
+        mic_icon = Svg(svg_file=str(svg_path), name="mic-icon")
         mic_icon.set_size_request(ICON_SIZE, ICON_SIZE)
         inner_circle_frame = Gtk.Frame()
         inner_circle_frame.set_name("inner-circle")
