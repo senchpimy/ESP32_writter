@@ -3,19 +3,19 @@ import socket
 import time
 import threading
 
-import numpy as np
 import escritor as esc
 import popup
+from utils import increase_volume_pcm16, get_final_result
 from gi.repository import GLib
 from fabric import Application
 
 HOST = "0.0.0.0"
 PORT = 8888
 SAMPLE_RATE = 16000.0
-VOLUME_MULTIPLIER = 10.0
+VOLUME_MULTIPLIER = 5.0
 
-# ENGINE_CHOICE = "whisper"
-ENGINE_CHOICE = "vosk"
+ENGINE_CHOICE = "whisper"
+# ENGINE_CHOICE = "vosk"
 
 VOSK_MODEL_PATH = "./models/vosk-model-es-0.42"
 # "tiny", "base", "small", "medium", "large"
@@ -31,32 +31,6 @@ TIMEOUT_PAUSA = 2.0
 TIMEOUT_ESPERA = 60.0
 
 CSS_STYLES = popup.CSS_STYLES_TEMPLATE
-
-
-def increase_volume_pcm16(audio_bytes, multiplier):
-    if not audio_bytes or len(audio_bytes) % 2 != 0:
-        return audio_bytes
-    try:
-        samples = np.frombuffer(audio_bytes, dtype=np.int16)
-        samples_float = samples.astype(np.float64) * multiplier
-        samples_clipped = np.clip(samples_float, -32768, 32767)
-        return samples_clipped.astype(np.int16).tobytes()
-    except:
-        return audio_bytes
-
-
-def get_final_result(engine, popup_window, addr, popup_is_visible):
-    text = engine.get_final_result()
-    if text:
-        print(f"[{addr}] Final: {text}")
-        GLib.idle_add(popup_window.update_text, text.capitalize())
-        time.sleep(2.0)
-
-    print("Transmision terminada")
-    if popup_is_visible:
-        GLib.idle_add(popup_window.hide)
-
-    print(f"[{addr}] Transcipcion finalizada.")
 
 
 def handle_client_connection(conn, addr, popup_window, engine: esc.TranscriptionEngine):
@@ -132,6 +106,7 @@ def handle_client_connection(conn, addr, popup_window, engine: esc.Transcription
             ):
                 pass
             else:
+                partial_text = ""
                 is_whisper = isinstance(engine, esc.WhisperEngine)
                 if is_whisper:
                     current_time = time.time()
